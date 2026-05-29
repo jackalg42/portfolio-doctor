@@ -39,22 +39,14 @@ sector_map = {
 }
 
 def letter_grade(score):
-    if score >= 90:
-        return "A"
-    if score >= 85:
-        return "A-"
-    if score >= 80:
-        return "B+"
-    if score >= 75:
-        return "B"
-    if score >= 70:
-        return "B-"
-    if score >= 65:
-        return "C+"
-    if score >= 60:
-        return "C"
-    if score >= 55:
-        return "C-"
+    if score >= 90: return "A"
+    if score >= 85: return "A-"
+    if score >= 80: return "B+"
+    if score >= 75: return "B"
+    if score >= 70: return "B-"
+    if score >= 65: return "C+"
+    if score >= 60: return "C"
+    if score >= 55: return "C-"
     return "D"
 
 if st.button("Diagnose Portfolio"):
@@ -84,14 +76,12 @@ if st.button("Diagnose Portfolio"):
     bond_weight = sector_df[sector_df["Sector"].isin(["Bond ETF"])]["Weight"].sum()
     unknown_weight = sector_df[sector_df["Sector"].isin(["Unknown"])]["Weight"].sum()
 
-    # Cluster 1: better scoring system
     concentration_score = max(0, 100 - max(0, top_weight - 15) * 2.5)
     diversification_score = min(100, num_holdings * 12)
     sector_score = max(0, 100 - max(0, tech_growth_weight - 35) * 1.8)
     broad_market_score = min(100, broad_etf_weight * 2)
 
     risk_match_score = 100
-
     if risk_tolerance == "Low":
         if tech_growth_weight > 40:
             risk_match_score -= 30
@@ -99,13 +89,11 @@ if st.button("Diagnose Portfolio"):
             risk_match_score -= 25
         if time_horizon == "0-3 years":
             risk_match_score -= 20
-
     elif risk_tolerance == "Medium":
         if tech_growth_weight > 60:
             risk_match_score -= 20
         if broad_etf_weight < 30:
             risk_match_score -= 20
-
     else:
         if num_holdings < 4:
             risk_match_score -= 15
@@ -124,12 +112,7 @@ if st.button("Diagnose Portfolio"):
 
     grade = letter_grade(health_score)
 
-    if health_score >= 75:
-        risk_level = "Lower Risk"
-    elif health_score >= 55:
-        risk_level = "Moderate Risk"
-    else:
-        risk_level = "High Risk"
+    risk_level = "Lower Risk" if health_score >= 75 else "Moderate Risk" if health_score >= 55 else "High Risk"
 
     if top_weight > 25:
         main_issue = "Single-Position Concentration"
@@ -181,6 +164,91 @@ if st.button("Diagnose Portfolio"):
 
     st.dataframe(sector_df.sort_values("Weight", ascending=False), use_container_width=True)
 
+    if risk_tolerance == "Low":
+        target = {"Broad Market ETFs": 60, "Bonds/Cash": 30, "Individual Stocks": 10}
+    elif risk_tolerance == "Medium":
+        target = {"Broad Market ETFs": 70, "Bonds/Cash": 15, "Individual Stocks": 15}
+    else:
+        target = {"Broad Market ETFs": 75, "Bonds/Cash": 5, "Individual Stocks": 20}
+
+    current_broad = broad_etf_weight
+    current_bonds = bond_weight
+    current_individual = max(0, 100 - current_broad - current_bonds)
+
+    comparison_df = pd.DataFrame({
+        "Category": ["Broad Market ETFs", "Bonds/Cash", "Individual Stocks"],
+        "Current %": [current_broad, current_bonds, current_individual],
+        "Target %": [target["Broad Market ETFs"], target["Bonds/Cash"], target["Individual Stocks"]]
+    })
+
+    comparison_df["Difference %"] = comparison_df["Target %"] - comparison_df["Current %"]
+    comparison_df["Dollar Difference"] = comparison_df["Difference %"] / 100 * total_value
+
+    st.subheader("Current vs Target Allocation")
+
+    fig_compare = px.bar(
+        comparison_df,
+        x="Category",
+        y=["Current %", "Target %"],
+        barmode="group",
+        title="Current Portfolio vs Suggested Target"
+    )
+    st.plotly_chart(fig_compare, use_container_width=True)
+
+    st.dataframe(comparison_df, use_container_width=True)
+
+    st.subheader("Recommended Trades")
+
+    trade_rows = []
+
+    broad_needed = comparison_df.loc[comparison_df["Category"] == "Broad Market ETFs", "Dollar Difference"].iloc[0]
+    bonds_needed = comparison_df.loc[comparison_df["Category"] == "Bonds/Cash", "Dollar Difference"].iloc[0]
+    individual_excess = -comparison_df.loc[comparison_df["Category"] == "Individual Stocks", "Dollar Difference"].iloc[0]
+
+    if individual_excess > 0:
+        oversized_positions = holdings[holdings["Weight"] > 20].copy()
+
+        if len(oversized_positions) > 0:
+            total_oversized = oversized_positions["Amount"].sum()
+
+            for _, row in oversized_positions.iterrows():
+                sell_amount = min(row["Amount"] * 0.35, individual_excess * row["Amount"] / total_oversized)
+
+                if sell_amount > 100:
+                    trade_rows.append({
+                        "Action": "Sell",
+                        "Ticker": row["Ticker"],
+                        "Amount": round(sell_amount, 2),
+                        "Reason": "Reduce concentration / fund target allocation"
+                    })
+
+    if broad_needed > 100:
+        trade_rows.append({
+            "Action": "Buy",
+            "Ticker": "VOO or VTI",
+            "Amount": round(broad_needed, 2),
+            "Reason": "Increase broad-market diversification"
+        })
+
+    if bonds_needed > 100:
+        trade_rows.append({
+            "Action": "Buy",
+            "Ticker": "BND or short-term Treasuries",
+            "Amount": round(bonds_needed, 2),
+            "Reason": "Reduce volatility and match risk profile"
+        })
+
+    if len(trade_rows) == 0:
+        trade_rows.append({
+            "Action": "Hold",
+            "Ticker": "Portfolio",
+            "Amount": 0,
+            "Reason": "No major rebalance needed based on current model"
+        })
+
+    trades_df = pd.DataFrame(trade_rows)
+    st.dataframe(trades_df, use_container_width=True)
+
     st.subheader("Risk Diagnosis")
 
     diagnosis = []
@@ -205,13 +273,6 @@ if st.button("Diagnose Portfolio"):
 
     st.subheader("Suggested Target Allocation")
 
-    if risk_tolerance == "Low":
-        target = {"Broad Market ETFs": 60, "Bonds/Cash": 30, "Individual Stocks": 10}
-    elif risk_tolerance == "Medium":
-        target = {"Broad Market ETFs": 70, "Bonds/Cash": 15, "Individual Stocks": 15}
-    else:
-        target = {"Broad Market ETFs": 75, "Bonds/Cash": 5, "Individual Stocks": 20}
-
     target_df = pd.DataFrame({
         "Category": list(target.keys()),
         "Target %": list(target.values())
@@ -220,28 +281,17 @@ if st.button("Diagnose Portfolio"):
     fig_target = px.bar(target_df, x="Category", y="Target %", title="Suggested Target Allocation")
     st.plotly_chart(fig_target, use_container_width=True)
 
-    st.subheader("Rebalancing Ideas")
-
-    ideas = []
-
-    if broad_etf_weight < target["Broad Market ETFs"]:
-        ideas.append("Consider increasing broad-market ETF exposure through funds like VOO, VTI, or SPY.")
-    if tech_growth_weight > 50:
-        ideas.append("Consider reducing technology/growth concentration or adding healthcare, financials, industrials, or broad-market ETF exposure.")
-    if top_weight > 25:
-        ideas.append(f"Consider reducing {top_holding} so no single holding dominates the portfolio.")
-    if risk_tolerance == "Low" or time_horizon == "0-3 years":
-        ideas.append("Consider adding cash, short-term Treasuries, or bond ETFs to reduce volatility.")
-
-    for idea in ideas:
-        st.write("•", idea)
-
     st.subheader("Doctor's Summary")
 
     st.write(
         f"Your portfolio receives a grade of **{grade}** with a health score of **{health_score}/100**. "
         f"The main issue appears to be **{main_issue.lower()}**. "
         f"Your largest holding is **{top_holding}** at **{top_weight:.1f}%**, and your technology/growth exposure is **{tech_growth_weight:.1f}%**."
+    )
+
+    st.write(
+        "The rebalancing table above translates the diagnosis into approximate dollar actions. "
+        "These are educational suggestions, not personalized investment advice."
     )
 
     st.caption("This analysis is simplified and should not be treated as personalized financial advice.")
